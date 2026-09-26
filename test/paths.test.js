@@ -19,5 +19,7 @@ describe('paths', () => {
     assert.equal(logicalPath('/api/server/api/server/peerjs/id'), '/peerjs/id');
     assert.equal(logicalPath('/api/server'), '/');
     assert.equal(logicalPath('/peerjs/'), '/peerjs');
+    assert.equal(logicalPath(''), '/');
+    assert.equal(peersPath('/app/', 'peerjs'), '/app/peerjs/peers');
   });
 });

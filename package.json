@@ -1,15 +1,52 @@
 {
   "name": "peerjs-server-vercel",
   "version": "1.0.0",
-  "private": true,
   "description": "PeerJS signaling server that runs on Vercel Fluid compute and on Node.",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
+  "main": "./src/create-server.js",
+  "exports": {
+    ".": "./src/create-server.js"
+  },
+  "bin": {
+    "peerjs-server-vercel": "./server.js"
+  },
+  "files": [
+    "src",
+    "api",
+    "server.js",
+    "vercel.json",
+    "LICENSE",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jose-compu/peerjs-server-vercel.git"
+  },
+  "homepage": "https://github.com/jose-compu/peerjs-server-vercel#readme",
+  "bugs": {
+    "url": "https://github.com/jose-compu/peerjs-server-vercel/issues"
+  },
+  "keywords": [
+    "peerjs",
+    "webrtc",
+    "signaling",
+    "signalling",
+    "vercel",
+    "dignity"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test --test-reporter=spec"
+    "test": "node --test --test-reporter=spec",
+    "test:unit": "node --test --test-reporter=spec test/unit test/paths.test.js",
+    "test:integration": "node --test --test-reporter=spec test/integration test/server.test.js",
+    "test:e2e": "node --test --test-reporter=spec test/e2e",
+    "prepublishOnly": "npm test"
   },
   "dependencies": {
     "ioredis": "^5.8.1",
