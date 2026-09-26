@@ -1,0 +1,19 @@
+{
+  "name": "peerjs-server-vercel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PeerJS signaling server that runs on Vercel Fluid compute and on Node.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test --test-reporter=spec"
+  },
+  "dependencies": {
+    "ioredis": "^5.8.1",
+    "ws": "^8.18.3"
+  },
+  "license": "MIT"
+}
