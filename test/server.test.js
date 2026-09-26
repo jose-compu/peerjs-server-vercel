@@ -63,6 +63,8 @@ async function start(options = {}) {
     concurrentLimit: 100,
     allowDiscovery: false,
     redisUrl: '',
+    upstashRestUrl: '',
+    upstashRestToken: '',
     ...options
   });
 

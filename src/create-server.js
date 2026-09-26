@@ -6,7 +6,8 @@ import { Errors, ID_PATTERN, MessageType, RELAY_TYPES } from './constants.js';
 import { configFromEnv } from './config.js';
 import { MemoryDirectory, RedisDirectory } from './directory.js';
 import { idPath, logicalPath, peersPath, socketPath } from './paths.js';
-import { RedisRelay } from './relay.js';
+import { InboxRelay, RedisRelay } from './relay.js';
+import { createUpstashClient } from './upstash-client.js';
 
 function sendJson(socket, message) {
   if (socket.readyState !== WebSocket.OPEN) {
@@ -67,11 +68,13 @@ function waitReady(client) {
   });
 }
 
-function createRedisClient(url) {
+function createRedisClient(url, { subscriber = false } = {}) {
   const client = new Redis(url, {
-    maxRetriesPerRequest: null,
+    maxRetriesPerRequest: subscriber ? null : 1,
     enableReadyCheck: true,
-    lazyConnect: true
+    lazyConnect: true,
+    connectTimeout: 4_000,
+    retryStrategy: () => null
   });
   client.on('error', () => {
     console.error('Redis connection error');
@@ -92,18 +95,41 @@ export async function createPeerServer(options = {}) {
   let unsubscribe = () => {};
   let ownsRedis = false;
   let redisClients = [];
+  let redisMode = 'memory';
 
-  if (!directory && config.redisUrl) {
+  if (!directory && !options.relay && config.redisUrl) {
     const publisher = createRedisClient(config.redisUrl);
-    const subscriber = createRedisClient(config.redisUrl);
-    await publisher.connect();
-    await subscriber.connect();
-    await Promise.all([waitReady(publisher), waitReady(subscriber)]);
-    directory = new RedisDirectory(publisher, config);
-    relay = new RedisRelay(publisher, subscriber, instanceId);
+    const subscriber = createRedisClient(config.redisUrl, { subscriber: true });
+    try {
+      await publisher.connect();
+      await subscriber.connect();
+      await Promise.all([waitReady(publisher), waitReady(subscriber)]);
+      directory = new RedisDirectory(publisher, config);
+      relay = new RedisRelay(publisher, subscriber, instanceId);
+      await relay.start();
+      ownsRedis = true;
+      redisMode = 'tcp';
+      redisClients = [publisher, subscriber];
+    } catch (error) {
+      publisher.disconnect();
+      subscriber.disconnect();
+      if (!config.upstashRestUrl || !config.upstashRestToken) {
+        throw error;
+      }
+      console.error('Redis TCP connection failed; using the Upstash REST relay');
+    }
+  }
+
+  if (!directory && !options.relay && config.upstashRestUrl && config.upstashRestToken) {
+    const client = createUpstashClient(config.upstashRestUrl, config.upstashRestToken);
+    directory = new RedisDirectory(client, config);
+    relay = new InboxRelay(client, instanceId, {
+      pollMs: config.relayPollMs,
+      hasWork: () => sockets.size > 0
+    });
     await relay.start();
     ownsRedis = true;
-    redisClients = [publisher, subscriber];
+    redisMode = 'upstash';
   }
 
   if (!directory) {
@@ -173,6 +199,10 @@ export async function createPeerServer(options = {}) {
   }
 
   async function expireQueued() {
+    if (sockets.size === 0) {
+      return;
+    }
+
     const expired = await directory.collectExpired(Date.now(), config.expireTimeout);
     const seen = new Set();
 
@@ -225,7 +255,8 @@ export async function createPeerServer(options = {}) {
       writeJson(res, 200, {
         status: 'ok',
         clients: await directory.count(),
-        redis: Boolean(config.redisUrl || ownsRedis)
+        redis: redisMode !== 'memory',
+        redisMode
       });
       return;
     }
@@ -305,9 +336,15 @@ export async function createPeerServer(options = {}) {
       token,
       generation: claim.generation,
       lastPing: now,
+      lastDirectoryTouch: now,
       socket
     };
     sockets.set(id, client);
+    if (typeof relay?.poll === 'function') {
+      relay.poll().catch(() => {
+        console.error('Inbox relay poll failed');
+      });
+    }
 
     if (claim.generation > 1 && relay) {
       await relay.publish({
@@ -370,7 +407,10 @@ export async function createPeerServer(options = {}) {
 
     if (message.type === MessageType.HEARTBEAT) {
       client.lastPing = Date.now();
-      await directory.touch(client.id, client.generation, client.lastPing, config.aliveTimeout);
+      if (client.lastPing - client.lastDirectoryTouch >= config.presenceTouchMs) {
+        client.lastDirectoryTouch = client.lastPing;
+        await directory.touch(client.id, client.generation, client.lastPing, config.aliveTimeout);
+      }
       return;
     }
 

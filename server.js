@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { configFromEnv, createPeerServer } from './src/create-server.js';
 
 const config = configFromEnv();
@@ -6,8 +7,9 @@ const port = Number(process.env.PORT || 9000);
 const host = process.env.HOST || '0.0.0.0';
 
 peer.httpServer.listen(port, host, () => {
-  console.log(`peerjs-server-vercel listening on http://${host}:${port}`);
-  console.log(`signaling url: ws://${host}:${port}/peerjs?key=${config.key}`);
+  const boundPort = peer.httpServer.address().port;
+  console.log(`peerjs-server-vercel listening on http://${host}:${boundPort}`);
+  console.log(`signaling url: ws://${host}:${boundPort}/peerjs?key=${config.key}`);
 });
 
 async function shutdown() {
