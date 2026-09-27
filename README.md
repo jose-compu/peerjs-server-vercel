@@ -51,6 +51,8 @@ Projects created before 23 April 2025: open the project, then Settings → Funct
 5. Deploy. The signaling URL is `wss://YOUR-DEPLOYMENT.vercel.app/peerjs?key=peerjs`.
 6. Confirm `https://YOUR-DEPLOYMENT.vercel.app/health` returns `"status": "ok"` and `"redis": true`.
 
+`vercel.json` sends every public path to the one function, `api/server.js`, and leaves the browser path (`/health`, `/peerjs/id`, `/peerjs`) on the request. The destination is `/api/server` with no path suffix. A suffix such as `/api/server/$1` makes Hobby return 404 for those paths, because only the function file itself is a route.
+
 The server turns those two REST variables into that database’s `rediss://` address and keeps one connection open. If that port cannot be reached, it uses the Upstash REST API and polls about once a second while peers are connected. Presence is refreshed every 30 seconds, not on every PeerJS heartbeat, so a personal server stays inside the free 500,000 commands.
 
 Hobby shares 1,024 file descriptors in the function, so the server accepts at most 200 peers at once on Vercel. A socket still closes at 300 seconds. The PeerJS client reconnects with the same id. An existing WebRTC data channel stays up across that reconnect.
