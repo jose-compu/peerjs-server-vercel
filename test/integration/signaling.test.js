@@ -222,6 +222,22 @@ describe('signaling integration', () => {
     }
   });
 
+  test('sends OPEN again when the same token reconnects', async () => {
+    const server = await start();
+
+    try {
+      const first = await openPeer(server.port, 'alice', 'same-token');
+      const second = connect(server.port, { id: 'alice', token: 'same-token' });
+      await second.opened;
+      assert.equal((await second.messages.next()).type, 'OPEN');
+      await delay(50);
+      assert.equal(first.ws.readyState, WebSocket.CLOSED);
+      second.ws.close();
+    } finally {
+      await server.peer.close();
+    }
+  });
+
   test('replaces the same token when the server is already full', async () => {
     const server = await start({ concurrentLimit: 1 });
 
@@ -262,6 +278,7 @@ describe('signaling integration', () => {
       await moved.opened;
       await delay(30);
       assert.equal(alice.ws.readyState, WebSocket.CLOSED);
+      assert.equal((await moved.messages.next()).type, 'OPEN');
 
       const bob = connect(right.port, { id: 'bob', token: 'bob-token' });
       await bob.opened;

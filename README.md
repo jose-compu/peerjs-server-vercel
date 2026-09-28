@@ -79,7 +79,7 @@ export const config = { maxDuration: 300 };
 export default peer.httpServer;
 ```
 
-**Keep `maxDuration` at 300 in both places.** Hobby rejects a deploy whose function limit is above 300 seconds. The two places are `functions` in `vercel.json` and `export const config` in `api/server.js`. Raising either one is a Pro change, done only after you are on Pro. The socket still ends at that limit. The PeerJS client reconnects with the same id, and an existing WebRTC data channel stays up across that reconnect.
+**Keep `maxDuration` at 300 in both places.** Hobby rejects a deploy whose function limit is above 300 seconds. The two places are `functions` in `vercel.json` and `export const config` in `api/server.js`. Raising either one is a Pro change, done only after you are on Pro. The socket still ends at that limit. The PeerJS client reconnects with the same id and token and must receive `{"type":"OPEN"}` again; an existing WebRTC data channel stays up across that reconnect.
 
 **Install one free Upstash database, and keep it free.** In the Marketplace integration set region `us-east-1` (`iad1`, next to Vercel’s default), the free plan, `autoUpgrade` off, and no production pack. `autoUpgrade` left on can move that database onto a paid plan when usage grows. The integration writes `REDIS_URL`, `KV_URL`, `KV_REST_API_URL`, `KV_REST_API_TOKEN`, and usually `UPSTASH_REDIS_REST_URL` plus `UPSTASH_REDIS_REST_TOKEN`. The server uses `REDIS_URL`, then `UPSTASH_REDIS_URL`, then `KV_URL`. If none of those is set, it builds a `rediss://` URL from the REST host and token. Do not commit any of those values.
 

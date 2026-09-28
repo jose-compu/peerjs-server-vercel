@@ -390,9 +390,7 @@ export async function createPeerServer(options = {}) {
       });
     });
 
-    if (claim.generation === 1) {
-      sendJson(socket, { type: MessageType.OPEN });
-    }
+    sendJson(socket, { type: MessageType.OPEN });
 
     const queued = await directory.drain(id);
     for (const message of queued) {

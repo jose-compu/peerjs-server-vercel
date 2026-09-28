@@ -1,6 +1,6 @@
 {
   "name": "peerjs-server-vercel",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "PeerJS signaling server that runs on Vercel Fluid compute and on Node.",
   "type": "module",
   "engines": {
