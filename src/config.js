@@ -15,6 +15,8 @@ function firstValue(...values) {
   return '';
 }
 
+// The Marketplace sets REDIS_URL or KV_URL, plus a REST URL and token.
+// TCP is preferred. The REST pair is only the fallback when that port fails.
 export function redisUrlFromEnv(env = process.env) {
   const explicit = firstValue(env.REDIS_URL, env.UPSTASH_REDIS_URL, env.KV_URL);
   if (explicit) {

@@ -1,3 +1,5 @@
+// Vercel serves api/server.js only at this path. Strip it when a rewrite
+// leaves the prefix on req.url so /health and /peerjs stay the public paths.
 const MOUNT_PREFIX = '/api/server';
 
 export function normalizeBase(path) {
