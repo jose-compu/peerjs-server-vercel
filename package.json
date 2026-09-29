@@ -46,11 +46,16 @@
     "test:unit": "node --test --test-reporter=spec test/unit test/paths.test.js",
     "test:integration": "node --test --test-reporter=spec test/integration test/server.test.js",
     "test:e2e": "node --test --test-reporter=spec test/e2e",
-    "prepublishOnly": "npm test"
+    "prepublishOnly": "npm test",
+    "bench": "vitest bench --run"
   },
   "dependencies": {
     "ioredis": "^5.8.1",
     "ws": "^8.18.3"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@codspeed/vitest-plugin": "^5.7.1",
+    "vitest": "^4.1.11"
+  }
 }
