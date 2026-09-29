@@ -1,5 +1,7 @@
 # peerjs-server-vercel
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/jose-compu/peerjs-server-vercel?utm_source=badge)
+
 PeerJS signaling server for [Vercel](https://vercel.com/docs/functions/websockets) and plain Node. It speaks the same HTTP and WebSocket protocol as [peerjs-server](https://github.com/peers/peerjs-server), so [dignity.js](https://github.com/jose-compu/dignity.js) and any other PeerJS client can use a server you run yourself.
 
 The server only forwards session descriptions and ICE candidates. It does not carry peer data channels.
@@ -150,3 +152,11 @@ npm test
 ```
 
 `npm publish` runs the full suite first. The npm account must be logged in as a maintainer of `peerjs-server-vercel`.
+
+## Benchmarks
+
+```bash
+npm run bench
+```
+
+The benchmarks in `bench/` use Vitest and cover path routing, config parsing, the memory and Redis directories, the relays, the Upstash REST client, and the HTTP routes. CI runs them on [CodSpeed](https://app.codspeed.io/jose-compu/peerjs-server-vercel) for every push to `main` and every pull request.
