@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import Redis from 'ioredis';
 import { Errors, ID_PATTERN, MessageType, RELAY_TYPES } from './constants.js';
-import { configFromEnv } from './config.js';
+import { configFromEnv, relayModeFromEnv } from './config.js';
 import { MemoryDirectory, RedisDirectory } from './directory.js';
 import { idPath, logicalPath, peersPath, socketPath } from './paths.js';
 import { InboxRelay, RedisRelay } from './relay.js';
@@ -87,6 +87,9 @@ export async function createPeerServer(options = {}) {
     ...configFromEnv(),
     ...options
   };
+  if (options.relayMode === undefined) {
+    config.relayMode = relayModeFromEnv(process.env, config);
+  }
 
   const instanceId = randomUUID();
   const sockets = new Map();
@@ -97,7 +100,7 @@ export async function createPeerServer(options = {}) {
   let redisClients = [];
   let redisMode = 'memory';
 
-  if (!directory && !options.relay && config.redisUrl) {
+  if (!directory && !options.relay && config.relayMode === 'tcp' && config.redisUrl) {
     const publisher = createRedisClient(config.redisUrl);
     const subscriber = createRedisClient(config.redisUrl, { subscriber: true });
     try {
@@ -120,7 +123,13 @@ export async function createPeerServer(options = {}) {
     }
   }
 
-  if (!directory && !options.relay && config.upstashRestUrl && config.upstashRestToken) {
+  if (
+    !directory &&
+    !options.relay &&
+    config.relayMode !== 'memory' &&
+    config.upstashRestUrl &&
+    config.upstashRestToken
+  ) {
     const client = createUpstashClient(config.upstashRestUrl, config.upstashRestToken);
     directory = new RedisDirectory(client, config);
     relay = new InboxRelay(client, instanceId, {
@@ -340,7 +349,10 @@ export async function createPeerServer(options = {}) {
       socket
     };
     sockets.set(id, client);
-    if (typeof relay?.poll === 'function') {
+    startMaintenance();
+    if (typeof relay?.wake === 'function') {
+      relay.wake();
+    } else if (typeof relay?.poll === 'function') {
       relay.poll().catch(() => {
         console.error('Inbox relay poll failed');
       });
@@ -362,6 +374,10 @@ export async function createPeerServer(options = {}) {
       }
 
       sockets.delete(id);
+      if (sockets.size === 0) {
+        stopMaintenance();
+        relay?.suspend?.();
+      }
       directory.removeIfGeneration(id, client.generation).catch(() => {
         console.error('Failed to remove peer registration');
       });
@@ -451,6 +467,9 @@ export async function createPeerServer(options = {}) {
     });
   });
 
+  httpServer.keepAliveTimeout = 1_000;
+  httpServer.headersTimeout = 2_000;
+
   httpServer.on('clientError', (_error, socket) => {
     socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
   });
@@ -509,19 +528,37 @@ export async function createPeerServer(options = {}) {
     });
   });
 
-  const cleanupTimer = setInterval(() => {
-    expireQueued().catch(() => {
-      console.error('Failed to expire queued signaling messages');
-    });
-  }, config.cleanupIntervalMs);
-  cleanupTimer.unref?.();
+  let maintenanceTimer = null;
 
-  const aliveTimer = setInterval(checkAlive, config.aliveCheckIntervalMs);
-  aliveTimer.unref?.();
+  function startMaintenance() {
+    if (maintenanceTimer || sockets.size === 0) {
+      return;
+    }
+
+    const every = Math.min(config.cleanupIntervalMs, config.aliveCheckIntervalMs);
+    maintenanceTimer = setInterval(() => {
+      if (sockets.size === 0) {
+        stopMaintenance();
+        return;
+      }
+      checkAlive();
+      expireQueued().catch(() => {
+        console.error('Failed to expire queued signaling messages');
+      });
+    }, every);
+    maintenanceTimer.unref?.();
+  }
+
+  function stopMaintenance() {
+    if (!maintenanceTimer) {
+      return;
+    }
+    clearInterval(maintenanceTimer);
+    maintenanceTimer = null;
+  }
 
   async function close() {
-    clearInterval(cleanupTimer);
-    clearInterval(aliveTimer);
+    stopMaintenance();
     unsubscribe();
 
     for (const client of [...sockets.values()]) {

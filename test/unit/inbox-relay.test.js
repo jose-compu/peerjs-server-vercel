@@ -48,4 +48,23 @@ describe('inbox relay', () => {
       await relay.close();
     }
   });
+
+  test('polls only while this instance has peers', async () => {
+    const redis = new MiniRedis();
+    let peers = false;
+    const relay = new InboxRelay(redis, 'solo', { pollMs: 60_000, hasWork: () => peers });
+
+    try {
+      await relay.start();
+      assert.equal(relay.isPolling(), false);
+      peers = true;
+      relay.wake();
+      assert.equal(relay.isPolling(), true);
+      peers = false;
+      relay.wake();
+      assert.equal(relay.isPolling(), false);
+    } finally {
+      await relay.close();
+    }
+  });
 });

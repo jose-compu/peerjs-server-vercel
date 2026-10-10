@@ -51,12 +51,41 @@ export class InboxRelay {
   async start() {
     await this.redis.sadd('psv:instances', this.instanceId);
     await this.redis.set(this.presenceKey(), '1', 'PX', String(Math.max(this.pollMs * 20, 15_000)));
-    this.timer = setInterval(() => {
+  }
+
+  isPolling() {
+    return this.timer !== null;
+  }
+
+  suspend() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  wake() {
+    if (this.closed || !this.hasWork()) {
+      this.suspend();
+      return;
+    }
+    if (this.timer) {
+      return;
+    }
+
+    const tick = () => {
+      if (this.closed || !this.hasWork()) {
+        this.suspend();
+        return;
+      }
       this.poll().catch(() => {
         console.error('Inbox relay poll failed');
       });
-    }, this.pollMs);
+    };
+
+    this.timer = setInterval(tick, this.pollMs);
     this.timer.unref?.();
+    tick();
   }
 
   async publish(event) {

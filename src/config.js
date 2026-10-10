@@ -16,7 +16,8 @@ function firstValue(...values) {
 }
 
 // The Marketplace sets REDIS_URL or KV_URL, plus a REST URL and token.
-// TCP is preferred. The REST pair is only the fallback when that port fails.
+// A long-lived Node process uses TCP. Vercel uses REST so the 2 GB Fluid
+// instance can pause when no peer socket is open.
 export function redisUrlFromEnv(env = process.env) {
   const explicit = firstValue(env.REDIS_URL, env.UPSTASH_REDIS_URL, env.KV_URL);
   if (explicit) {
@@ -40,8 +41,30 @@ export function redisUrlFromEnv(env = process.env) {
   }
 }
 
+export function relayModeFromEnv(env, { redisUrl = '', upstashRestUrl = '', upstashRestToken = '' } = {}) {
+  const forced = env.PEERJS_RELAY_MODE;
+  if (forced === 'rest' || forced === 'tcp' || forced === 'memory') {
+    return forced;
+  }
+
+  const rest = Boolean(upstashRestUrl && upstashRestToken);
+  if (env.VERCEL === '1' && rest) {
+    return 'rest';
+  }
+  if (redisUrl) {
+    return 'tcp';
+  }
+  if (rest) {
+    return 'rest';
+  }
+  return 'memory';
+}
+
 export function configFromEnv(env = process.env) {
   const onVercel = env.VERCEL === '1';
+  const redisUrl = redisUrlFromEnv(env);
+  const upstashRestUrl = firstValue(env.UPSTASH_REDIS_REST_URL, env.KV_REST_API_URL);
+  const upstashRestToken = firstValue(env.UPSTASH_REDIS_REST_TOKEN, env.KV_REST_API_TOKEN);
 
   return {
     key: env.PEERJS_KEY || 'peerjs',
@@ -52,9 +75,10 @@ export function configFromEnv(env = process.env) {
     aliveCheckIntervalMs: positiveNumber(env.PEERJS_ALIVE_CHECK_INTERVAL, 5_000),
     concurrentLimit: positiveNumber(env.PEERJS_CONCURRENT_LIMIT, onVercel ? 200 : 5_000),
     allowDiscovery: env.ALLOW_DISCOVERY === 'true',
-    redisUrl: redisUrlFromEnv(env),
-    upstashRestUrl: firstValue(env.UPSTASH_REDIS_REST_URL, env.KV_REST_API_URL),
-    upstashRestToken: firstValue(env.UPSTASH_REDIS_REST_TOKEN, env.KV_REST_API_TOKEN),
+    redisUrl,
+    upstashRestUrl,
+    upstashRestToken,
+    relayMode: relayModeFromEnv(env, { redisUrl, upstashRestUrl, upstashRestToken }),
     relayPollMs: positiveNumber(env.PEERJS_RELAY_POLL_MS, 1_000),
     presenceTouchMs: positiveNumber(env.PEERJS_PRESENCE_TOUCH_MS, 30_000),
     maxMessageBytes: positiveNumber(env.PEERJS_MAX_MESSAGE_BYTES, 65_536)

@@ -16,6 +16,7 @@ describe('configFromEnv', () => {
     assert.equal(config.concurrentLimit, 5_000);
     assert.equal(config.allowDiscovery, false);
     assert.equal(config.redisUrl, '');
+    assert.equal(config.relayMode, 'memory');
     assert.equal(config.maxMessageBytes, 65_536);
   });
 
@@ -42,6 +43,7 @@ describe('configFromEnv', () => {
     assert.equal(config.concurrentLimit, 3);
     assert.equal(config.allowDiscovery, true);
     assert.equal(config.redisUrl, 'redis://127.0.0.1:6379');
+    assert.equal(config.relayMode, 'tcp');
     assert.equal(config.maxMessageBytes, 128);
   });
 
@@ -85,5 +87,14 @@ describe('configFromEnv', () => {
       UPSTASH_REDIS_REST_TOKEN: 'token'
     });
     assert.equal(explicit, 'rediss://explicit.example:6379');
+
+    const vercel = configFromEnv({
+      VERCEL: '1',
+      REDIS_URL: 'rediss://explicit.example:6379',
+      UPSTASH_REDIS_REST_URL: 'https://us1-example.upstash.io',
+      UPSTASH_REDIS_REST_TOKEN: 'token'
+    });
+    assert.equal(vercel.relayMode, 'rest');
+    assert.equal(vercel.redisUrl, 'rediss://explicit.example:6379');
   });
 });

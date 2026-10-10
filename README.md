@@ -56,11 +56,11 @@ Projects created before 23 April 2025: open the project, then Settings → Funct
 | Request | Working result | If it fails |
 | --- | --- | --- |
 | `GET /` | JSON `name` is `peerjs-server-vercel` | The function did not deploy. |
-| `GET /health` | `"status": "ok"`, `"redis": true`, `"redisMode": "tcp"` or `"upstash"` | See the routing and Redis notes below. |
+| `GET /health` | `"status": "ok"`, `"redis": true`, `"redisMode": "upstash"` on Vercel | See the routing and Redis notes below. |
 | `GET /peerjs/id` | A plain-text id | Same routing failure as `/health`. |
 | `wss://…/peerjs?key=peerjs&id=…&token=…` | First frame is `{"type":"OPEN"}` | Fluid compute is off, or the rewrite never reached the function. |
 
-`redisMode` is `tcp` when the Upstash TCP port connected, `upstash` when the server fell back to the REST API, and `memory` when no Redis credentials were found. `memory` is correct for `npm start` on one machine. On Vercel it means two peers on different instances cannot see each other.
+`redisMode` is `upstash` on Vercel, `tcp` for a long-running Node process that opened Redis, and `memory` when no Redis credentials were found. `memory` is correct for `npm start` on one machine. On Vercel it means two peers on different instances cannot see each other.
 
 A Vercel failure is `text/plain`, body `The page could not be found`, header `x-vercel-error: NOT_FOUND`. That response is generated at the edge and never enters `api/server.js`. The server’s own errors are JSON.
 
@@ -83,7 +83,11 @@ export default peer.httpServer;
 
 **Install one free Upstash database, and keep it free.** In the Marketplace integration set region `us-east-1` (`iad1`, next to Vercel’s default), the free plan, `autoUpgrade` off, and no production pack. `autoUpgrade` left on can move that database onto a paid plan when usage grows. The integration writes `REDIS_URL`, `KV_URL`, `KV_REST_API_URL`, `KV_REST_API_TOKEN`, and usually `UPSTASH_REDIS_REST_URL` plus `UPSTASH_REDIS_REST_TOKEN`. The server uses `REDIS_URL`, then `UPSTASH_REDIS_URL`, then `KV_URL`. If none of those is set, it builds a `rediss://` URL from the REST host and token. Do not commit any of those values.
 
-The TCP connection is preferred. If that port cannot be reached, the server uses the Upstash REST API and polls about once a second, and only while this instance has peers. Presence is written every 30 seconds, not on every PeerJS heartbeat, so a personal server stays inside the free 500,000 commands per month.
+**Hobby Fluid memory is fixed at 2 GB.** It cannot be lowered in `vercel.json` or the dashboard. Provisioned memory is 2 GB times the hours an instance still has in-flight work. An open PeerJS socket is that work. After the last socket closes, the instance pauses and the meter stops.
+
+On Vercel the server therefore uses the Upstash REST API instead of a standing Redis TCP connection. A TCP client, and a poll timer that never stops, keep the instance from pausing, so one quiet deployment can burn about 48 GB-hours per day (2 GB × 24 h) with nobody in a game. REST calls end with the HTTP request. The inbox poll and the idle-peer sweep run only while a socket is open on this instance, then both stop. Presence is still written every 30 seconds, not on every heartbeat, so the free 500,000 commands stay enough for a personal server.
+
+A long-running `npm start` process still prefers TCP. Set `PEERJS_RELAY_MODE=tcp` only if you accept that the Vercel instance will stay up.
 
 **Leave every other Vercel product off.** Postgres, Blob, KV as its own product, Edge Config, Cron, Queues, and Secure Compute are unused. Adding them does not make signaling work and can start a paid meter.
 
@@ -130,7 +134,8 @@ The default URL is `ws://127.0.0.1:9000/peerjs?key=peerjs`.
 | `PEERJS_KEY` | `peerjs` | Key the client must send |
 | `PEERJS_PATH` | `/` | Base path. Socket is `{path}/peerjs` |
 | `ALLOW_DISCOVERY` | `false` | `GET /{key}/peers` lists connected ids |
-| `REDIS_URL` | empty, else `UPSTASH_REDIS_URL`, else `KV_URL`, else a `rediss://` URL built from the REST host and token | Shared presence and cross-instance relay. The Marketplace sets `REDIS_URL` and `KV_URL`. |
+| `PEERJS_RELAY_MODE` | `rest` on Vercel when REST credentials exist, otherwise `tcp` if a Redis URL exists, otherwise `memory` | `rest` lets the Hobby instance pause. `tcp` keeps a connection open. |
+| `REDIS_URL` | empty, else `UPSTASH_REDIS_URL`, else `KV_URL`, else a `rediss://` URL built from the REST host and token | Shared presence and cross-instance relay. The Marketplace sets `REDIS_URL` and `KV_URL`. Ignored for the connection type on Vercel when REST credentials exist. |
 | `UPSTASH_REDIS_REST_URL` | else `KV_REST_API_URL` | Free Upstash REST endpoint. Used when TCP cannot connect. |
 | `UPSTASH_REDIS_REST_TOKEN` | else `KV_REST_API_TOKEN` | Token for that REST endpoint. |
 | `PEERJS_ALIVE_TIMEOUT` | `90000` | Drop a peer that stops heartbeats |
