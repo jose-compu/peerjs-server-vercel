@@ -24,20 +24,6 @@ redis.call('SADD', KEYS[2], ARGV[4])
 return generation
 `;
 
-const TOUCH_SCRIPT = `
-local raw = redis.call('GET', KEYS[1])
-if not raw then
-  return 0
-end
-local obj = cjson.decode(raw)
-if tonumber(obj.generation) ~= tonumber(ARGV[1]) then
-  return 0
-end
-obj.lastPing = tonumber(ARGV[2])
-redis.call('SET', KEYS[1], cjson.encode(obj), 'PX', ARGV[3])
-return 1
-`;
-
 const REMOVE_SCRIPT = `
 local raw = redis.call('GET', KEYS[1])
 if not raw then
@@ -183,15 +169,10 @@ export class RedisDirectory {
     return JSON.parse(raw);
   }
 
-  async touch(id, generation, now = Date.now(), ttlMs = this.aliveTimeout) {
-    const updated = await this.redis.eval(
-      TOUCH_SCRIPT,
-      1,
-      this.clientKey(id),
-      String(generation),
-      String(now),
-      String(ttlMs)
-    );
+  async touch(id, _generation, _now = Date.now(), ttlMs = this.aliveTimeout) {
+    // One PEXPIRE. The stored token and generation stay as claim wrote them,
+    // so a stale socket can extend the TTL but cannot replace the record.
+    const updated = await this.redis.pexpire(this.clientKey(id), ttlMs);
     return Number(updated) === 1;
   }
 
@@ -209,9 +190,6 @@ export class RedisDirectory {
 
   async has(id) {
     const exists = await this.redis.exists(this.clientKey(id));
-    if (!exists) {
-      await this.redis.srem(CLIENTS_KEY, id);
-    }
     return exists === 1;
   }
 

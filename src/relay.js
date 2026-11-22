@@ -1,4 +1,7 @@
 const CHANNEL = 'psv:relay';
+const LIVE_KEY = 'psv:live';
+const LEGACY_INSTANCES_KEY = 'psv:instances';
+const INBOX_READ = 100;
 
 export function createMemoryRelay() {
   const listeners = new Set();
@@ -20,28 +23,33 @@ export function createMemoryRelay() {
   };
 }
 
-const DRAIN_INBOX = `
-local items = redis.call('LRANGE', KEYS[1], 0, -1)
-if #items > 0 then
-  redis.call('DEL', KEYS[1])
-end
-return items
-`;
-
 export class InboxRelay {
-  constructor(redis, instanceId, { pollMs = 1000, hasWork = () => true } = {}) {
+  constructor(redis, instanceId, {
+    pollMs = 1000,
+    idlePollMs = 5000,
+    burstMs = 20_000,
+    presenceTtlMs = 90_000,
+    presenceRefreshMs = 60_000,
+    hasWork = () => true
+  } = {}) {
     this.redis = redis;
     this.instanceId = instanceId;
     this.pollMs = pollMs;
+    this.idlePollMs = Math.max(idlePollMs, pollMs);
+    this.burstMs = burstMs;
+    this.presenceTtlMs = presenceTtlMs;
+    this.presenceRefreshMs = presenceRefreshMs;
     this.hasWork = hasWork;
     this.listener = null;
     this.timer = null;
     this.closed = false;
+    this.started = false;
+    this.released = true;
+    this.migrated = false;
     this.lastPresence = 0;
-  }
-
-  presenceKey() {
-    return `psv:instance:${this.instanceId}`;
+    this.activeUntil = 0;
+    this.liveCache = null;
+    this.scheduledAt = 0;
   }
 
   inboxKey() {
@@ -49,8 +57,27 @@ export class InboxRelay {
   }
 
   async start() {
-    await this.redis.sadd('psv:instances', this.instanceId);
-    await this.redis.set(this.presenceKey(), '1', 'PX', String(Math.max(this.pollMs * 20, 15_000)));
+    await this.ensureStarted();
+  }
+
+  async ensureStarted() {
+    if (this.closed) {
+      return;
+    }
+    if (!this.migrated) {
+      await this.redis.del(LEGACY_INSTANCES_KEY);
+      this.migrated = true;
+    }
+    if (this.started && !this.released) {
+      return;
+    }
+
+    const now = Date.now();
+    await this.redis.zadd(LIVE_KEY, now + this.presenceTtlMs, this.instanceId);
+    this.started = true;
+    this.released = false;
+    this.lastPresence = now;
+    this.liveCache = null;
   }
 
   isPolling() {
@@ -59,51 +86,101 @@ export class InboxRelay {
 
   suspend() {
     if (this.timer) {
-      clearInterval(this.timer);
+      clearTimeout(this.timer);
       this.timer = null;
     }
+    this.release();
   }
 
-  wake() {
+  release() {
+    if (!this.started || this.released) {
+      return;
+    }
+    this.released = true;
+    this.liveCache = null;
+    this.redis.zrem(LIVE_KEY, this.instanceId).catch(() => {
+      console.error('Failed to drop instance presence');
+    });
+  }
+
+  wake({ burst = true } = {}) {
     if (this.closed || !this.hasWork()) {
       this.suspend();
       return;
     }
+    if (burst) {
+      this.activeUntil = Date.now() + this.burstMs;
+    }
     if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.arm(0);
+  }
+
+  arm(delay) {
+    if (this.closed || !this.hasWork()) {
+      this.suspend();
       return;
     }
 
-    const tick = () => {
-      if (this.closed || !this.hasWork()) {
-        this.suspend();
-        return;
-      }
-      this.poll().catch(() => {
-        console.error('Inbox relay poll failed');
-      });
-    };
-
-    this.timer = setInterval(tick, this.pollMs);
+    this.scheduledAt = Date.now() + delay;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.poll()
+        .catch(() => {
+          console.error('Inbox relay poll failed');
+        })
+        .finally(() => {
+          if (this.closed || !this.hasWork()) {
+            this.suspend();
+            return;
+          }
+          const wait = Date.now() < this.activeUntil ? this.pollMs : this.idlePollMs;
+          this.arm(wait);
+        });
+    }, delay);
     this.timer.unref?.();
-    tick();
+  }
+
+  async liveIds(now) {
+    if (this.liveCache && now - this.liveCache.at < 2000) {
+      return this.liveCache.ids;
+    }
+
+    await this.redis.zremrangebyscore(LIVE_KEY, '-inf', now);
+    const ids = await this.redis.zrange(LIVE_KEY, 0, -1);
+    this.liveCache = { at: now, ids };
+    return ids;
   }
 
   async publish(event) {
-    const instances = await this.redis.smembers('psv:instances');
+    await this.ensureStarted();
+    const now = Date.now();
+    const ids = await this.liveIds(now);
     const payload = JSON.stringify(event);
+    const ttl = String(Math.max(this.idlePollMs * 3, 30_000));
 
-    for (const id of instances) {
+    for (const id of ids) {
       if (id === this.instanceId) {
         continue;
       }
+      const key = `psv:inbox:${id}`;
+      await this.redis.rpush(key, payload);
+      await this.redis.pexpire(key, ttl);
+    }
 
-      const alive = await this.redis.exists(`psv:instance:${id}`);
-      if (!alive) {
-        await this.redis.srem('psv:instances', id);
-        continue;
+    this.activeUntil = now + this.burstMs;
+    if (!this.hasWork() || this.closed) {
+      return;
+    }
+    const soon = now + this.pollMs;
+    if (!this.timer || this.scheduledAt > soon) {
+      if (this.timer) {
+        clearTimeout(this.timer);
+        this.timer = null;
       }
-
-      await this.redis.rpush(`psv:inbox:${id}`, payload);
+      this.arm(this.pollMs);
     }
   }
 
@@ -113,15 +190,20 @@ export class InboxRelay {
     }
 
     const now = Date.now();
-    if (now - this.lastPresence >= 10_000) {
+    if (now - this.lastPresence >= this.presenceRefreshMs) {
       this.lastPresence = now;
-      await this.redis.set(this.presenceKey(), '1', 'PX', String(Math.max(this.pollMs * 20, 15_000)));
+      await this.redis.zadd(LIVE_KEY, now + this.presenceTtlMs, this.instanceId);
+      await this.redis.zremrangebyscore(LIVE_KEY, '-inf', now);
+      this.liveCache = null;
     }
-    const items = await this.redis.eval(DRAIN_INBOX, 1, this.inboxKey());
-    if (!Array.isArray(items)) {
+
+    const popped = await this.redis.lpop(this.inboxKey(), INBOX_READ);
+    const items = Array.isArray(popped) ? popped : popped ? [popped] : [];
+    if (items.length === 0) {
       return;
     }
 
+    this.activeUntil = Date.now() + this.burstMs;
     for (const raw of items) {
       try {
         this.listener(JSON.parse(raw));
@@ -143,12 +225,16 @@ export class InboxRelay {
   async close() {
     this.closed = true;
     if (this.timer) {
-      clearInterval(this.timer);
+      clearTimeout(this.timer);
       this.timer = null;
     }
     this.listener = null;
-    await this.redis.srem('psv:instances', this.instanceId);
-    await this.redis.del(this.presenceKey());
+    if (!this.started) {
+      return;
+    }
+    this.released = true;
+    await this.redis.zrem(LIVE_KEY, this.instanceId);
+    await this.redis.del(this.inboxKey());
   }
 }
 

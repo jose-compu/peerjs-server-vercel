@@ -62,6 +62,30 @@ export function createUpstashClient(url, token, fetchImpl = globalThis.fetch) {
       return call('LRANGE', key, String(start), String(stop));
     },
 
+    async lpop(key, count) {
+      return call('LPOP', key, String(count));
+    },
+
+    async llen(key) {
+      return call('LLEN', key);
+    },
+
+    async zadd(key, score, member) {
+      return call('ZADD', key, String(score), String(member));
+    },
+
+    async zrem(key, member) {
+      return call('ZREM', key, String(member));
+    },
+
+    async zrange(key, start, stop) {
+      return call('ZRANGE', key, String(start), String(stop));
+    },
+
+    async zremrangebyscore(key, min, max) {
+      return call('ZREMRANGEBYSCORE', key, String(min), String(max));
+    },
+
     async lindex(key, index) {
       return call('LINDEX', key, String(index));
     },

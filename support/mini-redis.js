@@ -3,6 +3,7 @@ export class MiniRedis {
     this.values = new Map();
     this.sets = new Map();
     this.lists = new Map();
+    this.zsets = new Map();
   }
 
   #fresh(bucket, key) {
@@ -44,7 +45,12 @@ export class MiniRedis {
   async del(...keys) {
     let removed = 0;
     for (const key of keys) {
-      if (this.values.delete(key) || this.lists.delete(key)) {
+      if (
+        this.values.delete(key) ||
+        this.lists.delete(key) ||
+        this.sets.delete(key) ||
+        this.zsets.delete(key)
+      ) {
         removed += 1;
       }
     }
@@ -97,6 +103,70 @@ export class MiniRedis {
     const list = entry.value;
     const end = stop < 0 ? list.length + stop : stop;
     return list.slice(start, end + 1);
+  }
+
+  async lpop(key, count = 1) {
+    const entry = this.#fresh(this.lists, key);
+    if (!entry || entry.value.length === 0) {
+      return null;
+    }
+    const items = entry.value.splice(0, Math.min(Number(count) || 1, entry.value.length));
+    if (entry.value.length === 0) {
+      this.lists.delete(key);
+    }
+    return items;
+  }
+
+  async llen(key) {
+    return this.#fresh(this.lists, key)?.value.length ?? 0;
+  }
+
+  #zset(key) {
+    const existing = this.zsets.get(key);
+    if (existing) {
+      return existing;
+    }
+    const created = new Map();
+    this.zsets.set(key, created);
+    return created;
+  }
+
+  async zadd(key, score, member) {
+    this.#zset(key).set(String(member), Number(score));
+    return 1;
+  }
+
+  async zrem(key, member) {
+    const zset = this.zsets.get(key);
+    if (!zset?.delete(String(member))) {
+      return 0;
+    }
+    return 1;
+  }
+
+  async zrange(key, start, stop) {
+    const members = [...(this.zsets.get(key) ?? new Map()).entries()]
+      .sort((left, right) => left[1] - right[1] || (left[0] < right[0] ? -1 : 1))
+      .map(([member]) => member);
+    const end = Number(stop) < 0 ? members.length + Number(stop) : Number(stop);
+    return members.slice(Number(start), end + 1);
+  }
+
+  async zremrangebyscore(key, min, max) {
+    const zset = this.zsets.get(key);
+    if (!zset) {
+      return 0;
+    }
+    const low = min === '-inf' ? -Infinity : Number(min);
+    const high = max === '+inf' ? Infinity : Number(max);
+    let removed = 0;
+    for (const [member, score] of zset) {
+      if (score >= low && score <= high) {
+        zset.delete(member);
+        removed += 1;
+      }
+    }
+    return removed;
   }
 
   async lindex(key, index) {

@@ -85,7 +85,7 @@ export default peer.httpServer;
 
 **Hobby Fluid memory is fixed at 2 GB.** It cannot be lowered in `vercel.json` or the dashboard. Provisioned memory is 2 GB times the hours an instance still has in-flight work. An open PeerJS socket is that work. After the last socket closes, the instance pauses and the meter stops.
 
-On Vercel the server therefore uses the Upstash REST API instead of a standing Redis TCP connection. A TCP client, and a poll timer that never stops, keep the instance from pausing, so one quiet deployment can burn about 48 GB-hours per day (2 GB × 24 h) with nobody in a game. REST calls end with the HTTP request. The inbox poll and the idle-peer sweep run only while a socket is open on this instance, then both stop. Presence is still written every 30 seconds, not on every heartbeat, so the free 500,000 commands stay enough for a personal server.
+On Vercel the server therefore uses the Upstash REST API instead of a standing Redis TCP connection. A TCP client, and a poll timer that never stops, keep the instance from pausing, so one quiet deployment can burn about 48 GB-hours per day (2 GB × 24 h) with nobody in a game. REST calls end with the HTTP request. Redis is not touched until a peer socket opens. While one is open, the inbox is read once a second for 20 seconds (the WebRTC handshake), then every 5 seconds. Upstash bills every `redis.call` inside a Lua script, so an empty inbox is a single `LPOP` and a live peer refreshes Redis with one `PEXPIRE` every 60 seconds, not on every heartbeat. A dead instance ages out of the live set on its own. That keeps a personal server inside the free 500,000 commands.
 
 A long-running `npm start` process still prefers TCP. Set `PEERJS_RELAY_MODE=tcp` only if you accept that the Vercel instance will stay up.
 
@@ -139,7 +139,10 @@ The default URL is `ws://127.0.0.1:9000/peerjs?key=peerjs`.
 | `UPSTASH_REDIS_REST_URL` | else `KV_REST_API_URL` | Free Upstash REST endpoint. Used when TCP cannot connect. |
 | `UPSTASH_REDIS_REST_TOKEN` | else `KV_REST_API_TOKEN` | Token for that REST endpoint. |
 | `PEERJS_ALIVE_TIMEOUT` | `90000` | Drop a peer that stops heartbeats |
-| `PEERJS_PRESENCE_TOUCH_MS` | `30000` | How often a live peer refreshes Redis |
+| `PEERJS_PRESENCE_TOUCH_MS` | `60000` | How often a live peer refreshes its Redis TTL |
+| `PEERJS_RELAY_POLL_MS` | `1000` | Inbox poll during the first 20 seconds of a call, and after a signal |
+| `PEERJS_RELAY_IDLE_POLL_MS` | `5000` | Inbox poll once the handshake burst is over |
+| `PEERJS_RELAY_BURST_MS` | `20000` | How long the fast inbox poll stays on after a peer connects or a signal is sent |
 | `PEERJS_EXPIRE_TIMEOUT` | `5000` | Drop an offer waiting for an offline peer |
 | `PEERJS_CONCURRENT_LIMIT` | `5000`, or `200` on Vercel | Maximum registered peers |
 

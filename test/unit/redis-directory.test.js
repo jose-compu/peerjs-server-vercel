@@ -15,7 +15,9 @@ describe('RedisDirectory', () => {
     const first = await peers.claim('alice', 'token-a', 10);
     assert.deepEqual(first, { ok: true, generation: 1 });
     assert.equal(await peers.touch('alice', 1, 25), true);
-    assert.equal((await peers.get('alice')).lastPing, 25);
+    assert.equal((await peers.get('alice')).lastPing, 10);
+    assert.equal((await peers.get('alice')).token, 'token-a');
+    assert.equal(await peers.touch('missing', 1, 25), false);
 
     const again = await peers.claim('alice', 'token-a', 30);
     assert.equal(again.generation, 2);

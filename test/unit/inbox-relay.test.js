@@ -49,6 +49,42 @@ describe('inbox relay', () => {
     }
   });
 
+  test('drops an instance whose presence score has expired', async () => {
+    const redis = new MiniRedis();
+    const left = new InboxRelay(redis, 'left', { pollMs: 60_000, idlePollMs: 60_000, hasWork: () => true });
+    await redis.zadd('psv:live', 1, 'ghost');
+
+    try {
+      await left.start();
+      await left.publish({ kind: 'signal', origin: 'left', message: { type: 'OFFER' } });
+      assert.equal(await redis.llen('psv:inbox:ghost'), 0);
+      assert.deepEqual(await redis.zrange('psv:live', 0, -1), ['left']);
+    } finally {
+      await left.close();
+    }
+  });
+
+  test('an empty poll reads the inbox once', async () => {
+    const redis = new MiniRedis();
+    let reads = 0;
+    const original = redis.lpop.bind(redis);
+    redis.lpop = async (...args) => {
+      reads += 1;
+      return original(...args);
+    };
+    const relay = new InboxRelay(redis, 'solo', { pollMs: 60_000, hasWork: () => true });
+    relay.subscribe(() => {});
+
+    try {
+      await relay.start();
+      reads = 0;
+      await relay.poll();
+      assert.equal(reads, 1);
+    } finally {
+      await relay.close();
+    }
+  });
+
   test('polls only while this instance has peers', async () => {
     const redis = new MiniRedis();
     let peers = false;

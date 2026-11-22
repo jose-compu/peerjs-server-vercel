@@ -134,9 +134,10 @@ export async function createPeerServer(options = {}) {
     directory = new RedisDirectory(client, config);
     relay = new InboxRelay(client, instanceId, {
       pollMs: config.relayPollMs,
+      idlePollMs: config.relayIdlePollMs,
+      burstMs: config.relayBurstMs,
       hasWork: () => sockets.size > 0
     });
-    await relay.start();
     ownsRedis = true;
     redisMode = 'upstash';
   }
@@ -183,6 +184,10 @@ export async function createPeerServer(options = {}) {
     }
   }
 
+  let lastQueueSweep = Date.now();
+  let queueSoon = false;
+  let sweepAfter = 0;
+
   async function forward(message) {
     if (!message?.dst) {
       return;
@@ -204,6 +209,11 @@ export async function createPeerServer(options = {}) {
 
     if (message.type !== MessageType.LEAVE && message.type !== MessageType.EXPIRE) {
       await directory.enqueue(message.dst, message);
+      const dueAt = Date.now() + config.expireTimeout;
+      if (!queueSoon || dueAt < sweepAfter) {
+        sweepAfter = dueAt;
+      }
+      queueSoon = true;
     }
   }
 
@@ -212,7 +222,18 @@ export async function createPeerServer(options = {}) {
       return;
     }
 
-    const expired = await directory.collectExpired(Date.now(), config.expireTimeout);
+    const now = Date.now();
+    const due = queueSoon && now >= sweepAfter;
+    const safety = now - lastQueueSweep >= 60_000;
+    if (!due && !safety) {
+      return;
+    }
+    if (due) {
+      queueSoon = false;
+    }
+    lastQueueSweep = now;
+
+    const expired = await directory.collectExpired(now, config.expireTimeout);
     const seen = new Set();
 
     for (const message of expired) {
@@ -263,7 +284,7 @@ export async function createPeerServer(options = {}) {
     if (pathname === '/health') {
       writeJson(res, 200, {
         status: 'ok',
-        clients: await directory.count(),
+        clients: await clientCount(),
         redis: redisMode !== 'memory',
         redisMode
       });
@@ -349,9 +370,13 @@ export async function createPeerServer(options = {}) {
       socket
     };
     sockets.set(id, client);
+    invalidateCensus();
     startMaintenance();
+    if (typeof relay?.ensureStarted === 'function') {
+      await relay.ensureStarted();
+    }
     if (typeof relay?.wake === 'function') {
-      relay.wake();
+      relay.wake({ burst: true });
     } else if (typeof relay?.poll === 'function') {
       relay.poll().catch(() => {
         console.error('Inbox relay poll failed');
@@ -374,6 +399,7 @@ export async function createPeerServer(options = {}) {
       }
 
       sockets.delete(id);
+      invalidateCensus();
       if (sockets.size === 0) {
         stopMaintenance();
         relay?.suspend?.();
@@ -528,33 +554,63 @@ export async function createPeerServer(options = {}) {
     });
   });
 
-  let maintenanceTimer = null;
+  let aliveTimer = null;
+  let sweepTimer = null;
+  let census = { at: 0, value: null };
+
+  function invalidateCensus() {
+    census.value = null;
+  }
+
+  async function clientCount() {
+    const now = Date.now();
+    if (census.value !== null && now - census.at < 15_000) {
+      return census.value;
+    }
+    const value = await directory.count();
+    census = { at: now, value };
+    return value;
+  }
 
   function startMaintenance() {
-    if (maintenanceTimer || sockets.size === 0) {
+    if (sockets.size === 0) {
       return;
     }
 
-    const every = Math.min(config.cleanupIntervalMs, config.aliveCheckIntervalMs);
-    maintenanceTimer = setInterval(() => {
-      if (sockets.size === 0) {
-        stopMaintenance();
-        return;
-      }
-      checkAlive();
-      expireQueued().catch(() => {
-        console.error('Failed to expire queued signaling messages');
-      });
-    }, every);
-    maintenanceTimer.unref?.();
+    if (!aliveTimer) {
+      aliveTimer = setInterval(() => {
+        if (sockets.size === 0) {
+          stopMaintenance();
+          return;
+        }
+        checkAlive();
+      }, config.aliveCheckIntervalMs);
+      aliveTimer.unref?.();
+    }
+
+    if (!sweepTimer) {
+      sweepTimer = setInterval(() => {
+        if (sockets.size === 0) {
+          stopMaintenance();
+          return;
+        }
+        expireQueued().catch(() => {
+          console.error('Failed to expire queued signaling messages');
+        });
+      }, config.cleanupIntervalMs);
+      sweepTimer.unref?.();
+    }
   }
 
   function stopMaintenance() {
-    if (!maintenanceTimer) {
-      return;
+    if (aliveTimer) {
+      clearInterval(aliveTimer);
+      aliveTimer = null;
     }
-    clearInterval(maintenanceTimer);
-    maintenanceTimer = null;
+    if (sweepTimer) {
+      clearInterval(sweepTimer);
+      sweepTimer = null;
+    }
   }
 
   async function close() {

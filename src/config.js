@@ -80,7 +80,9 @@ export function configFromEnv(env = process.env) {
     upstashRestToken,
     relayMode: relayModeFromEnv(env, { redisUrl, upstashRestUrl, upstashRestToken }),
     relayPollMs: positiveNumber(env.PEERJS_RELAY_POLL_MS, 1_000),
-    presenceTouchMs: positiveNumber(env.PEERJS_PRESENCE_TOUCH_MS, 30_000),
+    relayIdlePollMs: positiveNumber(env.PEERJS_RELAY_IDLE_POLL_MS, 5_000),
+    relayBurstMs: positiveNumber(env.PEERJS_RELAY_BURST_MS, 20_000),
+    presenceTouchMs: positiveNumber(env.PEERJS_PRESENCE_TOUCH_MS, 60_000),
     maxMessageBytes: positiveNumber(env.PEERJS_MAX_MESSAGE_BYTES, 65_536)
   };
 }

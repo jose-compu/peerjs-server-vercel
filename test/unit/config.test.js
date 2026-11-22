@@ -10,8 +10,10 @@ describe('configFromEnv', () => {
     assert.equal(config.aliveTimeout, 90_000);
     assert.equal(config.expireTimeout, 5_000);
     assert.equal(config.cleanupIntervalMs, 10_000);
-    assert.equal(config.presenceTouchMs, 30_000);
+    assert.equal(config.presenceTouchMs, 60_000);
     assert.equal(config.relayPollMs, 1_000);
+    assert.equal(config.relayIdlePollMs, 5_000);
+    assert.equal(config.relayBurstMs, 20_000);
     assert.equal(config.aliveCheckIntervalMs, 5_000);
     assert.equal(config.concurrentLimit, 5_000);
     assert.equal(config.allowDiscovery, false);
